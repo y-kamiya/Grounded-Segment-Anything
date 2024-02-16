@@ -30,6 +30,9 @@ from diffusers import StableDiffusionInpaintPipeline
 from transformers import BlipProcessor, BlipForConditionalGeneration
 
 import openai
+from huggingface_hub import hf_hub_download
+from pathlib import Path
+
 
 def show_anns(anns):
     if len(anns) == 0:
@@ -91,6 +94,21 @@ def transform_image(image_pil):
     )
     image, _ = transform(image_pil, None)  # 3, h, w
     return image
+
+
+def load_model_hf(repo_id, filename, ckpt_config_filename, device='cpu'):
+    cache_config_file = hf_hub_download(repo_id=repo_id, filename=ckpt_config_filename)
+
+    args = SLConfig.fromfile(cache_config_file) 
+    model = build_model(args)
+    args.device = device
+
+    cache_file = hf_hub_download(repo_id=repo_id, filename=filename)
+    checkpoint = torch.load(cache_file, map_location='cpu')
+    log = model.load_state_dict(clean_state_dict(checkpoint['model']), strict=False)
+    print("Model loaded from {} \n => {}".format(cache_file, log))
+    _ = model.eval()
+    return model
 
 
 def load_model(model_config_path, model_checkpoint_path, device):
@@ -171,9 +189,9 @@ def draw_box(box, draw, label):
 
 
 
-config_file = 'GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py'
+config_file = 'GroundingDINO_SwinB.cfg.py'
 ckpt_repo_id = "ShilongLiu/GroundingDINO"
-ckpt_filenmae = "groundingdino_swint_ogc.pth"
+ckpt_filenmae = "groundingdino_swinb_cogcoor.pth"
 sam_checkpoint='sam_vit_h_4b8939.pth' 
 output_dir="outputs"
 device="cuda"
@@ -206,7 +224,8 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
         sam_automask_generator = SamAutomaticMaskGenerator(sam)
 
     if groundingdino_model is None:
-        groundingdino_model = load_model(config_file, ckpt_filenmae, device=device)
+        #groundingdino_model = load_model(config_file, ckpt_filenmae, device=device)
+        groundingdino_model = load_model_hf(ckpt_repo_id, ckpt_filenmae, config_file, device=device)
 
     image_pil = image.convert("RGB")
     image = np.array(image_pil)
@@ -329,6 +348,12 @@ def run_grounded_sam(input_image, text_prompt, task_type, inpaint_prompt, box_th
 
         image_pil = image_pil.convert('RGBA')
         image_pil.alpha_composite(mask_image)
+
+        dir = output_dir / Path("images") / text_prompt
+        os.makedirs(dir, exist_ok=True)
+        image_pil.save(dir / "image.png")
+        mask_image.save(dir / "mask.png")
+
         return [image_pil, mask_image]
     elif task_type == 'inpainting':
         assert inpaint_prompt, 'inpaint_prompt is not found!'
